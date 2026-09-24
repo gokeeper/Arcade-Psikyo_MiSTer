@@ -1,0 +1,50 @@
+name: Quartus Build
+
+on:
+  push:
+    branches: [crt-hsize-vsize]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile Psikyo
+        run: |
+          cat > build.sh <<'SH'
+          set -e
+          quartus_sh --flow compile Psikyo -c Psikyo
+          SH
+          docker run --rm --entrypoint bash -v "$PWD:/work" -w /work raetro/quartus:17.0 build.sh
+
+      - name: Timing summary
+        if: always()
+        run: |
+          cat output_files/Psikyo.sta.summary || true
+          grep -A3 -i "slack" output_files/Psikyo.sta.summary | grep -E "^\s*Slack" | sort -t: -k2 -g | head -5 || true
+          cat output_files/Psikyo.fit.summary || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Psikyo-build
+          path: |
+            output_files/Psikyo.rbf
+            output_files/Psikyo.fit.summary
+            output_files/Psikyo.map.summary
+            output_files/Psikyo.sta.summary
+            output_files/Psikyo.sta.rpt
+            output_files/Psikyo.flow.rpt
+          if-no-files-found: warn
+          retention-days: 30

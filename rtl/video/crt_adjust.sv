@@ -1,16 +1,20 @@
 //============================================================================
-//  VENDORED, UNMODIFIED, from rmonic79/Arcade-Raiden_MiSTer
-//  (rtl/Raiden/crt_adjust.sv), the reference implementation for this
-//  control. Author: Umberto Parisi (rmonic79), GPL v3 or later -- same
-//  licence as this project. Do not edit locally: re-vendor from upstream so
-//  fixes there (e.g. the 97-entry H-Position wrap) carry over.
+//  VENDORED from rmonic79/Arcade-Raiden_MiSTer (rtl/Raiden/crt_adjust.sv),
+//  the reference implementation for this control, identical to
+//  rmonic79/MiSTer-CRT-Adjust's rtl/crt_adjust.sv. Author: Umberto Parisi
+//  (rmonic79), GPL v3 or later -- same licence as this project. Re-vendor
+//  from upstream so fixes there (e.g. the 97-entry H-Position wrap) carry
+//  over.
 //
-//  This core wires H-Position and V-Shift only ("CRT Offset"); `hsize` is
-//  tied to 0, which the module documents as pure no-scaling passthrough with
-//  the offsets still live. H-Size additionally needs an external variable
-//  read-rate generator for pxl2_cen (Raiden builds one from clk quarters);
-//  with hsize=0 the read rate equals the write rate, so pxl2_cen is simply
-//  the core's own ce_pix and no such generator is needed.
+//  ONE LOCAL CHANGE (marked LOCAL FIX below): hoff_s's zero branch is made
+//  signed. Mixing a signed and an unsigned operand in ?: makes the whole
+//  expression unsigned (IEEE 1364 5.5.1), so $signed(hoffset) was
+//  ZERO-extended and every negative H-Position became +464..+511 -- the read
+//  window then never opens and the picture goes black. Drop this change if
+//  upstream fixes it.
+//
+//  H-Size's variable read rate (pxl2_cen) and the V-Size stage ahead of this
+//  module are built in Psikyo.sv.
 //============================================================================
 //============================================================================
 //  crt_adjust.sv  —  "CRT Adjust"
@@ -331,7 +335,7 @@ module crt_adjust #(
     // offset is forced to 0 here and hb1/hb0 keep gating the native active area.
     wire signed [AW+1:0] hoff_s  = (HPOS_MODE == `HPOS_CONTENTSHIFT)
                                    ? $signed(hoffset)
-                                   : {(AW+2){1'b0}};
+                                   : $signed({(AW+2){1'b0}});   // LOCAL FIX: keep ?: signed
     wire signed [AW+1:0] rdcnt_s = $signed({2'b0, rdcnt});
     wire signed [AW+1:0] hb1_s   = $signed({2'b0, hb1});
     wire signed [AW+1:0] hb0_s   = $signed({2'b0, hb0});
