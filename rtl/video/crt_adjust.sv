@@ -13,8 +13,8 @@
 //  window then never opens and the picture goes black. Drop this change if
 //  upstream fixes it.
 //
-//  H-Size's variable read rate (pxl2_cen) and the V-Size stage ahead of this
-//  module are built in Psikyo.sv.
+//  Instantiated by rtl/video/crt_chain.sv, which also builds H-Size's
+//  variable read rate (pxl2_cen) and the V-Size stage ahead of this module.
 //============================================================================
 //============================================================================
 //  crt_adjust.sv  —  "CRT Adjust"

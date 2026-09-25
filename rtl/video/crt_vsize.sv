@@ -4,9 +4,9 @@
 //  Umberto Parisi (rmonic79), GPL v3 or later -- same licence as this
 //  project. Do not edit locally: re-vendor from upstream.
 //
-//  Wired in Psikyo.sv ahead of crt_adjust (native -> crt_vsize ->
-//  crt_adjust -> arcade_video), as upstream's docs/vsize-integration.md
-//  prescribes.
+//  Instantiated by rtl/video/crt_chain.sv ahead of crt_adjust (native ->
+//  crt_vsize -> crt_adjust -> arcade_video), as upstream's
+//  docs/vsize-integration.md prescribes.
 //============================================================================
 //============================================================================
 //  crt_vsize.sv  —  "CRT V-Size" (vertical stretch / shrink at 15 kHz)
