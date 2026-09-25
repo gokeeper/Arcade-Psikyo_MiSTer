@@ -130,6 +130,9 @@ localparam CONF_STR = {
 	"O[64],CRT Adjust,Off,On;",
 	"H2O[71:65],CRT H-Position,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,+32,+33,+34,+35,+36,+37,+38,+39,+40,+41,+42,+43,+44,+45,+46,+47,+48,-48,-47,-46,-45,-44,-43,-42,-41,-40,-39,-38,-37,-36,-35,-34,-33,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
 	"H2O[77:72],CRT V-Shift,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,+16,+17,+18,+19,+20,+21,+22,+23,+24,+25,+26,+27,+28,+29,+30,+31,-32,-31,-30,-29,-28,-27,-26,-25,-24,-23,-22,-21,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"H2O[85:81],CRT H-Size,0,+1,+2,+3,+4,+5,+6,+7,+8,+9,+10,+11,+12,+13,+14,+15,-16,-15,-14,-13,-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1;",
+	"H2O[89:86],CRT V-Size,0,+1,+2,+3,+4,+5,+6,+7,-7,-6,-5,-4,-3,-2,-1;",
+	"H2O[90],CRT V-Size Mode,PVM,Cabinet;",
 	"-;",
 	"DIP;",
 	"-;",
@@ -715,11 +718,16 @@ psikyo_top #(.BOARD_GUNBIRD(1'b0), .DEBUG_TRACER(DEBUG_TRACER_EN)) psikyo_top
 // moves the image vertically and V-Shift horizontally, since both act on the
 // NATIVE raster, which is what a real CRT in a TATE cabinet wants.
 //
-// Only the two offsets are wired ("CRT Offset"); hsize is tied to 0, the
-// module's documented no-scaling case, which also makes the read rate equal
-// the write rate so pxl2_cen is just ce_pix. H-Size would additionally need a
-// variable read-rate generator (Raiden builds one from clk quarters).
+// H-Size and V-Size are wired on top of the offsets. H-Size scales the READ
+// rate out of the line buffer (see the read-rate generator below); V-Size is
+// rmonic79's companion stage (rtl/video/crt_vsize.sv), placed AHEAD of
+// crt_adjust as its integration guide requires:
+//   native raster -> crt_vsize -> crt_adjust -> arcade_video.
+// Both are held at 0 while the scandoubler is in use (31 kHz output, HQ2x or
+// scanlines): the read-rate base below assumes the native 15 kHz pixel rate,
+// and both controls exist to fit a 15 kHz tube. The offsets keep working.
 wire crt_adj_on = status[64];
+wire crt_scaling_ok = crt_adj_on & ~(forced_scandoubler | |status[46:44]);
 // H-Position: the OSD stores the INDEX into the option list, and that list has
 // 97 entries (0, +1..+48, -48..-1) -- so the negative half wraps at 97, NOT at
 // 128. Raiden hit exactly this: wrapping at 128 made "-1" jump 32 pixels.
@@ -730,6 +738,101 @@ wire signed [8:0] crt_hoffset = (crt_hpos_idx <= 7'd48)
 // V-Shift is a plain signed 6-bit field: its 64-entry list (0..+31, -32..-1)
 // IS two's complement, so no wrap fixup is needed.
 wire signed [5:0] crt_voffset = crt_adj_on ? $signed(status[77:72]) : 6'sd0;
+// H-Size: 32-entry list (0..+15, -16..-1) is two's complement as well.
+// + = wider (slower read), - = narrower.
+wire signed [4:0] crt_hsize = crt_scaling_ok ? $signed(status[85:81]) : 5'sd0;
+// V-Size: the list is 15 entries (0, +1..+7, -7..-1) -- NOT 16 -- so, as with
+// H-Position, the negative half wraps at the list length (15), not at 16:
+// index 8 is "-7". (A plain $signed() of the 4 bits, as upstream's snippet
+// does, would read index 8 as -8 and shift every negative step by one.)
+// One OSD step = 3 lines (~1.1%). The module's convention is +N lines =
+// SHORTER picture, so the step is negated to make the OSD "+" mean taller,
+// matching H-Size.
+wire  [3:0] crt_vsz_idx  = crt_scaling_ok ? status[89:86] : 4'd0;
+wire signed [5:0] crt_vsz_step = (crt_vsz_idx <= 4'd7)
+	? $signed({2'b00, crt_vsz_idx})
+	: $signed({2'b00, crt_vsz_idx}) - 6'sd15;
+reg  signed [5:0] crt_vsize;
+reg               crt_vsmode;
+always @(posedge clk_sys) if (ce_pix) begin
+	crt_vsize  <= -(crt_vsz_step + (crt_vsz_step <<< 1));   // -3 x step, -21..+21
+	crt_vsmode <= status[90];                               // 0 = PVM, 1 = Cabinet
+end
+
+// PVM-mode anchor. The PVM engine starts its output frame on the line after
+// VSync and, when the picture is made taller (fewer, longer lines), drops the
+// lines left over at the END of the frame. That suits boards whose blanking
+// sits mostly after the picture; Psikyo's is the other way round: 33 lines
+// from VSync to the first picture line, then only a 4-line front porch. So
+// every "taller" step past the first would cut picture lines off the bottom.
+// Delaying the VSync the engine sees by just enough lines moves the dropped
+// lines into the back porch instead: output line 0 is then D lines later in
+// the source frame, the picture ends D lines earlier, and it still fits in
+// 262 + vsize lines as long as D >= -vsize - 5. (-vsize - 4 leaves a line of
+// margin.) The picture moves up by D lines as it grows, i.e. it grows roughly
+// about its centre rather than only downward. Cabinet mode keeps native
+// timing and needs none of this.
+reg         crt_hs_nat_d = 1'b0;
+reg  [31:0] crt_vs_lines = 32'd0;
+wire        crt_hs_rise_nat = ce_pix & hsync & ~crt_hs_nat_d;
+always @(posedge clk_sys) if (ce_pix) begin
+	crt_hs_nat_d <= hsync;
+	if (crt_hs_rise_nat) crt_vs_lines <= {crt_vs_lines[30:0], vsync};
+end
+wire signed [6:0] crt_pvm_need = -$signed({crt_vsize[5], crt_vsize}) - 7'sd4;
+wire        [4:0] crt_pvm_dly  = (~crt_vsmode && crt_pvm_need > 7'sd0) ? crt_pvm_need[4:0] : 5'd0;
+wire              crt_vs_pre   = (crt_pvm_dly == 5'd0) ? vsync : crt_vs_lines[crt_pvm_dly - 5'd1];
+
+// ---- CRT V-Size (rtl/video/crt_vsize.sv) ----
+// Self-measuring and a registered passthrough (one ce_pix of latency) while
+// V-Size is 0 or CRT Adjust is Off. LINE_PX only has to hold the active
+// pixels (it stores DE pixels), so 320 rather than upstream's 384. The 46-line
+// ring covers the full -21..+21 line range.
+wire [7:0] vz_r, vz_g, vz_b;
+wire       vz_hs, vz_vs, vz_de, vz_vb, vz_ce;
+
+crt_vsize #(
+	.RING_LINES(46),
+	.LINE_PX   (320)
+) u_crt_vsize (
+	.clk      (clk_sys),
+	.pxl_cen  (ce_pix),
+	.active   (crt_scaling_ok),
+	.tube_mode(crt_vsmode),
+	.vsize    (crt_vsize),
+	.r_in(r8_raw), .g_in(g8_raw), .b_in(b8_raw),
+	.hs_in(hsync), .vs_in(crt_vs_pre),
+	.de_in(~(hblank | vblank)),
+	.vb_in(vblank),            // TRUE vertical blank, never the combined one
+	.r_out(vz_r), .g_out(vz_g), .b_out(vz_b),
+	.hs_out(vz_hs), .vs_out(vz_vs), .de_out(vz_de), .vb_out(vz_vb),
+	.ce_out(vz_ce)
+);
+
+// ---- H-Size read-rate generator ----
+// Read one pixel every (base + hsize) QUARTERS of clk_sys. base is the
+// clk_sys/pixel ratio in quarters: 85.909091 MHz / 7.159091 MHz = 12 whole
+// cycles = 48 quarters, so hsize -16..+15 gives 32..63 quarters, each step
+// ~2%. With hsize 0 the read rate equals the write rate.
+// The accumulator restarts on the rise of crt_adjust's hs_ref_out, NOT on the
+// raw HSync: that shared edge is what keeps the write side, the module's read
+// counter and this read rate in phase (the module's documented wiring rule).
+wire crt_hs_ref;
+reg  crt_hs_ref_d;
+always @(posedge clk_sys) crt_hs_ref_d <= crt_hs_ref;
+wire crt_hs_ref_rise = crt_hs_ref & ~crt_hs_ref_d;
+
+wire [7:0] crt_rd_period = 8'd48 + {{3{crt_hsize[4]}}, crt_hsize};
+reg  [7:0] crt_rd_acc = 8'd0;
+wire       crt_rd_tick = (crt_rd_acc + 8'd4) >= crt_rd_period;
+always @(posedge clk_sys) begin
+	if      (crt_hs_ref_rise) crt_rd_acc <= 8'd0;
+	else if (crt_rd_tick)     crt_rd_acc <= crt_rd_acc + 8'd4 - crt_rd_period;
+	else                      crt_rd_acc <= crt_rd_acc + 8'd4;
+end
+// Off: crt_adjust is a passthrough clocked by its write CE, so everything
+// downstream keeps running on that CE, exactly as before.
+wire crt_ce = crt_adj_on ? crt_rd_tick : vz_ce;
 
 wire [7:0] crt_r, crt_g, crt_b;
 wire       crt_hs, crt_vs, crt_hb, crt_vb;
@@ -742,18 +845,42 @@ crt_adjust #(
 	.HPOS_MODE(1)
 ) u_crt_adjust (
 	.clk      (clk_sys),
-	.pxl_cen  (ce_pix),
-	.pxl2_cen (ce_pix),      // hsize tied 0 -> read rate == write rate
+	.pxl_cen  (vz_ce),       // write rate: crt_vsize's (possibly retimed) CE
+	.pxl2_cen (crt_rd_tick), // read rate: the H-Size generator above
 	.active   (crt_adj_on),
-	.hsize    (5'sd0),
+	.hsize    (crt_hsize),
 	.hoffset  (crt_hoffset),
 	.voffset  (crt_voffset),
-	.r_in(r8_raw), .g_in(g8_raw), .b_in(b8_raw),
-	.hs_in(hsync), .vs_in(vsync), .hb_in(hblank), .vb_in(vblank),
+	.r_in(vz_r), .g_in(vz_g), .b_in(vz_b),
+	// crt_vsize regenerates the vertical window, so its OWN vb must be passed
+	// on -- the native vblank would black out the extra rows of a taller
+	// picture.
+	.hs_in(vz_hs), .vs_in(vz_vs), .hb_in(~vz_de), .vb_in(vz_vb),
 	.r_out(crt_r), .g_out(crt_g), .b_out(crt_b),
 	.hs_out(crt_hs), .vs_out(crt_vs), .hb_out(crt_hb), .vb_out(crt_vb),
-	.hs_ref_out()
+	.hs_ref_out(crt_hs_ref)
 );
+
+// crt_adjust emits each line one line late (it reads the previous line out of
+// its ping-pong buffer) but passes VBlank through at the write side, so its
+// vb_out rises partway through the last picture line. With H-Size at 0 that
+// cut happens to fall before the line starts and the line just goes missing;
+// with H-Size moving the read timing it leaves a sliver of it on screen.
+// Sampling vb_out only at the output's own HSync makes VBlank change on line
+// boundaries, which keeps the last line whole. Off: untouched passthrough.
+reg crt_hs_d = 1'b0, crt_vb_line = 1'b1;
+always @(posedge clk_sys) if (crt_ce) begin
+	crt_hs_d <= crt_hs;
+	if (crt_hs & ~crt_hs_d) crt_vb_line <= crt_vb;
+end
+wire crt_vb_out = crt_adj_on ? crt_vb_line : crt_vb;
+// When H-Size and H-Position push the picture's right edge past the next
+// HSync, the read counter restarts mid-pixel and the last pixel comes out as
+// a one-pixel "active" stub at the start of the next line, inside the sync
+// pulse. Nothing inside HSync can be seen on a tube (the beam is retracing),
+// but the stub would still open DE for one pixel, which the scaler and the
+// rotator's width measurement would see. Blank the sync pulse outright.
+wire crt_hb_out = crt_adj_on ? (crt_hb | crt_hs) : crt_hb;
 
 wire [7:0] r8_raw = dbg_overlay ? dbg_pixel[23:16] : {rgb[14:10], rgb[14:12]};
 wire [7:0] g8_raw = dbg_overlay ? dbg_pixel[15:8]  : {rgb[9:5],   rgb[9:7]};
@@ -762,11 +889,13 @@ wire [7:0] b8_raw = dbg_overlay ? dbg_pixel[7:0]   : {rgb[4:0],   rgb[4:2]};
 arcade_video #(.WIDTH(320), .DW(24), .GAMMA(1)) arcade_video
 (
 	.clk_video(clk_sys),
-	.ce_pix(ce_pix),
+	// The CRT chain's outputs change on crt_ce (the H-Size read rate while
+	// CRT Adjust is On), so they must be sampled on that same CE.
+	.ce_pix(crt_ce),
 
 	.RGB_in({crt_r, crt_g, crt_b}),
-	.HBlank(crt_hb),
-	.VBlank(crt_vb),
+	.HBlank(crt_hb_out),
+	.VBlank(crt_vb_out),
 	.HSync(crt_hs),
 	.VSync(crt_vs),
 
