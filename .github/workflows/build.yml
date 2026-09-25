@@ -27,12 +27,13 @@ jobs:
           SH
           docker run --rm --entrypoint bash -v "$PWD:/work" -w /work raetro/quartus:17.0 build.sh
 
-      - name: Timing summary
-        if: always()
+      - name: Check timing
         run: |
-          cat output_files/Psikyo.sta.summary || true
-          grep -A3 -i "slack" output_files/Psikyo.sta.summary | grep -E "^\s*Slack" | sort -t: -k2 -g | head -5 || true
-          cat output_files/Psikyo.fit.summary || true
+          cat output_files/Psikyo.fit.summary
+          # Fail the build if any clock domain misses timing (negative slack).
+          worst=$(awk -F': ' '/Slack/ {print $2}' output_files/Psikyo.sta.summary | sort -g | head -1)
+          echo "Worst slack: $worst ns"
+          awk -v s="$worst" 'BEGIN { exit (s < 0) }'
 
       - name: Upload artifacts
         if: always()
