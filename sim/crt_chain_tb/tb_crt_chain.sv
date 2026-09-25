@@ -1,25 +1,10 @@
 `timescale 1ns/1ps
-// Self-checking test of rtl/video/crt_chain.sv (CRT Adjust: H-Position,
-// V-Shift, H-Size, V-Size in PVM and Cabinet modes) on the real raster from
-// rtl/video/video_timing.sv.
-//
-// The picture is a test pattern -- red = column, green = line, blue = 0x5A --
-// and the chain's output is sampled the way sys/arcade_video.v samples it: on
-// the CE, with VBlank latched when HBlank falls. Per frame it measures lines,
-// picture lines, pixels per picture line and their width in clk, the line
-// period, the first/last source line shown, and whether every line's pixels
-// are consecutive columns. Each scenario checks the last frame of its run.
-//
-// V-Size ramps one line per frame, so its scenarios run ~25 frames. The whole
-// run is ~220 frames: about 10 minutes under Verilator.
-//
-// From the repo root, with Verilator:
+// Self-checking test of rtl/video/crt_chain.sv on the video_timing raster,
+// sampled the way arcade_video samples it.
 //   $ verilator --binary --timing -Wno-fatal --top-module tb_crt_chain \
 //       sim/crt_chain_tb/tb_crt_chain.sv rtl/video/video_timing.sv \
 //       rtl/video/crt_chain.sv rtl/video/crt_vsize.sv rtl/video/crt_adjust.sv
 //   $ obj_dir/Vtb_crt_chain
-// or with ModelSim, after compiling the same files:
-//   $ vsim -c tb_crt_chain -do "run -all; quit -f"
 module tb_crt_chain;
 
 	logic clk = 0;
@@ -62,15 +47,13 @@ module tb_crt_chain;
 		.hs_out(hs), .vs_out(vs), .hb_out(hb), .vb_out(vb)
 	);
 
-	// ---- arcade_video's view: HBL per CE, VBL latched when HBlank falls ----
 	logic av_hbl = 1, av_vbl = 1;
 	always_ff @(posedge clk) if (ce) begin
 		av_hbl <= hb;
 		if (av_hbl & ~hb) av_vbl <= vb;
 	end
-	wire pic = ~hb & ~((av_hbl & ~hb) ? vb : av_vbl);   // this CE's pixel is shown
+	wire pic = ~hb & ~((av_hbl & ~hb) ? vb : av_vbl);
 
-	// ---- per-frame measurement ----
 	int clk_n = 0;
 	always_ff @(posedge clk) clk_n <= clk_n + 1;
 
@@ -79,7 +62,6 @@ module tb_crt_chain;
 	int lines, pic_lines, px, pic_start, line_start;
 	int px_min, px_max, w_min, w_max, per_min, per_max, bad, g_first, g_last;
 	int frames = 0;
-	// last completed frame
 	int f_lines, f_pic_lines, f_px_min, f_px_max, f_w_min, f_w_max;
 	int f_per_min, f_per_max, f_bad, f_g_first, f_g_last;
 
@@ -127,12 +109,9 @@ module tb_crt_chain;
 		end
 	end
 
-	// ---- scenarios ----
 	int fails = 0;
 
-	// Run `n` frames, then check the last one. -1 = don't care. Pixels per
-	// line must be uniform (min == max), columns consecutive, and the line
-	// period within 1 clk.
+	// Checks the last of `n` frames; -1 = don't care.
 	task automatic check(string name, int n, int e_lines, int e_pic, int e_px,
 	                     int e_w, int e_per, int e_gf, int e_gl);
 		int f0 = frames;
@@ -153,17 +132,14 @@ module tb_crt_chain;
 		//            name                   frames lines pic  px   w     period src
 		check("off (native)",                 3, 262, 224, 320, 3840, 5472, 0, 223);
 		active = 1;
-		// crt_adjust always drops the top line when active (inside the module)
 		check("on, all zero",                 3, 262, 223, 320, 3840, 5472, 1, 223);
 		hoffset = -1;
 		check("H-Position -1",                3, 262, 223, 320, 3840, 5472, 1, 223);
 		hoffset = -48;
 		check("H-Position -48",               3, 262, 223, 320, 3840, 5472, 1, 223);
 		hsize = 8;
-		// 14 clk/pixel; the last 3 pixels fall inside the HSync pulse
 		check("H-Size +8, H-Position -48",    3, 262, 223, 317, 4450, 5472, 1, 223);
 		hoffset = 0;
-		// stretched to the right: the line runs into the next HSync
 		check("H-Size +8",                    3, 262, 223, 269, -1,   5472, 1, 223);
 		hsize = -16;
 		check("H-Size -16",                   3, 262, 223, 320, 2560, 5472, 1, 223);

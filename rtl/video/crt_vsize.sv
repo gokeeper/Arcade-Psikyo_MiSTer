@@ -1,12 +1,6 @@
 //============================================================================
 //  VENDORED, UNMODIFIED, from rmonic79/MiSTer-CRT-Adjust (rtl/crt_vsize.sv,
-//  commit c682de9), the companion V-Size stage of crt_adjust.sv. Author:
-//  Umberto Parisi (rmonic79), GPL v3 or later -- same licence as this
-//  project. Do not edit locally: re-vendor from upstream.
-//
-//  Instantiated by rtl/video/crt_chain.sv ahead of crt_adjust (native ->
-//  crt_vsize -> crt_adjust -> arcade_video), as upstream's
-//  docs/vsize-integration.md prescribes.
+//  commit c682de9). Author: Umberto Parisi (rmonic79), GPL v3 or later.
 //============================================================================
 //============================================================================
 //  crt_vsize.sv  —  "CRT V-Size" (vertical stretch / shrink at 15 kHz)

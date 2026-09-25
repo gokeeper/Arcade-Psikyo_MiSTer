@@ -708,45 +708,30 @@ psikyo_top #(.BOARD_GUNBIRD(1'b0), .DEBUG_TRACER(DEBUG_TRACER_EN)) psikyo_top
 // The debug overlay is injected BEFORE arcade_video so it still works, but note
 // that scanlines/gamma will alter the pixel values the decoder reads -- keep
 // fx=0 and gamma off when capturing a trace, or the decode is meaningless.
-wire [7:0] r8_raw = dbg_overlay ? dbg_pixel[23:16] : {rgb[14:10], rgb[14:12]};
-wire [7:0] g8_raw = dbg_overlay ? dbg_pixel[15:8]  : {rgb[9:5],   rgb[9:7]};
-wire [7:0] b8_raw = dbg_overlay ? dbg_pixel[7:0]   : {rgb[4:0],   rgb[4:2]};
-
 // ---- CRT Adjust (rtl/video/crt_chain.sv) ----
-// rmonic79's CRT Adjust and CRT V-Size modules, between the core's raster and
-// arcade_video: H-Position, V-Shift, H-Size and V-Size for an analog CRT.
-// H-Position, V-Shift, H-Size and Cabinet-mode V-Size keep the sync native;
-// PVM-mode V-Size retimes the lines (see crt_chain.sv). HDMI follows the
-// adjustment too -- leave CRT Adjust Off for an untouched HDMI image. NOTE
-// this core is rotated: on the HDMI/rotated output H-Position moves the image
-// vertically and V-Shift horizontally, since both act on the NATIVE raster,
-// which is what a real CRT in a TATE cabinet wants.
-//
-// H-Size and V-Size are held at 0 while the scandoubler is in use (31 kHz
-// output, HQ2x or scanlines): the read-rate base assumes the native 15 kHz
-// pixel rate, and both controls exist to fit a 15 kHz tube. The offsets keep
-// working.
-//
-// Below, the OSD option INDICES are decoded into signed amounts. Each wraps at
-// its own list's length, which is why they are decoded here, next to
-// CONF_STR, rather than in the chain.
+// Slides the picture on an analog CRT without ever touching the sync: the
+// CONTENT is moved inside a line buffer while HSync/VSync stay native, so the
+// monitor keeps its lock while you adjust. Sits between the core's raster and
+// arcade_video, so (as the module documents for the core-side variant) HDMI
+// follows the adjustment too -- leave CRT Adjust Off for an untouched HDMI
+// image. NOTE this core is rotated: on the HDMI/rotated output H-Position
+// moves the image vertically and V-Shift horizontally, since both act on the
+// NATIVE raster, which is what a real CRT in a TATE cabinet wants.
+// H-Size and V-Size are 15 kHz only; PVM-mode V-Size retimes the lines.
 wire crt_adj_on   = status[64];
 wire crt_scale_en = ~(forced_scandoubler | |status[46:44]);
-// H-Position: the list has 97 entries (0, +1..+48, -48..-1), so the negative
-// half wraps at 97, NOT at 128. Raiden hit exactly this: wrapping at 128 made
-// "-1" jump 32 pixels.
+// H-Position: the OSD stores the INDEX into the option list, and that list has
+// 97 entries (0, +1..+48, -48..-1) -- so the negative half wraps at 97, NOT at
+// 128. Raiden hit exactly this: wrapping at 128 made "-1" jump 32 pixels.
 wire  [6:0] crt_hpos_idx = status[71:65];
 wire signed [8:0] crt_hoffset = (crt_hpos_idx <= 7'd48)
 	? $signed({2'b00, crt_hpos_idx})
 	: $signed({2'b00, crt_hpos_idx}) - 9'sd97;
-// V-Shift (64 entries: 0..+31, -32..-1) and H-Size (32 entries: 0..+15,
-// -16..-1) are plain two's complement, so no wrap fixup is needed.
+// V-Shift is a plain signed 6-bit field: its 64-entry list (0..+31, -32..-1)
+// IS two's complement, so no wrap fixup is needed.
 wire signed [5:0] crt_voffset = $signed(status[77:72]);
 wire signed [4:0] crt_hsize   = $signed(status[85:81]);
-// V-Size: 15 entries (0, +1..+7, -7..-1) -- NOT 16 -- so, as with H-Position,
-// the negative half wraps at 15: index 8 is "-7". (A plain $signed() of the 4
-// bits, as upstream's snippet does, reads index 8 as -8 and shifts every
-// negative step by one.)
+// V-Size's list has 15 entries, so its negative half wraps at 15, not 16.
 wire  [3:0] crt_vsz_idx  = status[89:86];
 wire signed [3:0] crt_vsz_step = (crt_vsz_idx <= 4'd7)
 	? $signed(crt_vsz_idx)
@@ -777,11 +762,13 @@ crt_chain crt_chain
 	.hs_out(crt_hs), .vs_out(crt_vs), .hb_out(crt_hb), .vb_out(crt_vb)
 );
 
+wire [7:0] r8_raw = dbg_overlay ? dbg_pixel[23:16] : {rgb[14:10], rgb[14:12]};
+wire [7:0] g8_raw = dbg_overlay ? dbg_pixel[15:8]  : {rgb[9:5],   rgb[9:7]};
+wire [7:0] b8_raw = dbg_overlay ? dbg_pixel[7:0]   : {rgb[4:0],   rgb[4:2]};
+
 arcade_video #(.WIDTH(320), .DW(24), .GAMMA(1)) arcade_video
 (
 	.clk_video(clk_sys),
-	// The CRT chain's outputs change on crt_ce (the H-Size read rate while
-	// CRT Adjust is On), so they are sampled on that same CE.
 	.ce_pix(crt_ce),
 
 	.RGB_in({crt_r, crt_g, crt_b}),

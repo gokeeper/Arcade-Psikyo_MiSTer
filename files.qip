@@ -50,13 +50,13 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/tile_cell_decode.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/tile_row_decode.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/tilemap_line_engine.sv
 
-# crt_adjust.sv (CRT Adjust; vendored from Arcade-Raiden_MiSTer, one local fix).
+# crt_adjust.sv (CRT Offset; vendored from Arcade-Raiden_MiSTer).
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/crt_adjust.sv
 
 # crt_vsize.sv (CRT V-Size; vendored from rmonic79/MiSTer-CRT-Adjust).
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/crt_vsize.sv
 
-# crt_chain.sv (CRT Adjust chain: crt_vsize -> crt_adjust, plus the glue they need).
+# crt_chain.sv (CRT Adjust: crt_vsize -> crt_adjust).
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/video/crt_chain.sv
 
 # hiscore.v (MAME hiscore.dat support; vendored from JimmyStones/Hiscores_MiSTer).
